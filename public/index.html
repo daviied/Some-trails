@@ -94,13 +94,13 @@
           <label>Username or email <input name="wanderer_user"></label>
           <label>Password <input name="wanderer_password" type="password"></label>
         </details>
-        <label>Sources (order = priority)
-          <select name="sources">
-            <option value="usgs,osm">USGS, then OpenStreetMap</option>
-            <option value="usgs">USGS only (US)</option>
-            <option value="osm">OpenStreetMap only</option>
-          </select>
-        </label>
+        <fieldset class="sources">
+          <legend>Sources (top = highest priority)</legend>
+          <label class="check"><input type="checkbox" name="src" value="usgs"> USGS National Digital Trails (US)</label>
+          <label class="check"><input type="checkbox" name="src" value="nps"> National Park Service (US)</label>
+          <label class="check"><input type="checkbox" name="src" value="usfs"> US Forest Service (US)</label>
+          <label class="check"><input type="checkbox" name="src" value="osm"> OpenStreetMap (world)</label>
+        </fieldset>
         <label class="check"><input type="checkbox" name="auto_push"> Auto-import new trails into Wanderer</label>
         <label>Skip trails shorter than (m) <input name="min_length_m" type="number" min="0"></label>
         <label>Fetch again after (days) <input name="cache_days" type="number" min="1"></label>
@@ -110,7 +110,7 @@
         </div>
         <div id="settingsMsg" class="note"></div>
       </form>
-      <p class="small">Trail data: USGS National Digital Trails (public domain) and © OpenStreetMap contributors (ODbL).</p>
+      <p class="small">Trail data: USGS National Digital Trails, National Park Service, and US Forest Service (public domain), and © OpenStreetMap contributors (ODbL).</p>
     </section>
   </aside>
 </main>

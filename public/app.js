@@ -12,7 +12,7 @@
   const mi = (m) => (m / 1609.344).toFixed(1) + " mi";
   const STATUS = { pushed: "In Wanderer", queued: "Queued", new: "Not pushed", duplicate: "Already in Wanderer", skipped: "Skipped", error: "Error" };
   const COLORS = { pushed: "#2f6b3b", queued: "#1a62b4", new: "#c05a00", duplicate: "#6b7d2f", skipped: "#888", error: "#b3261e" };
-  const SRC = { usgs: "USGS", osm: "OSM", upload: "Upload" };
+  const SRC = { usgs: "USGS", nps: "NPS", usfs: "USFS", osm: "OSM", upload: "Upload" };
 
   // ---------- map ----------
   const saved = JSON.parse(localStorageGet("view") || "null");
@@ -304,7 +304,8 @@
     form.wanderer_user.value = s.wanderer_user || "";
     form.wanderer_api_key.placeholder = s.has_api_key ? "•••••••• (saved, type to replace)" : "wanderer_key_…  (Wanderer → Settings → API)";
     form.wanderer_password.placeholder = s.has_password ? "•••••••• (saved)" : "";
-    form.sources.value = s.sources;
+    const on = String(s.sources).split(",");
+    form.querySelectorAll("input[name=src]").forEach((c) => (c.checked = on.includes(c.value)));
     form.auto_push.checked = s.auto_push === "true";
     form.min_length_m.value = s.min_length_m;
     form.cache_days.value = s.cache_days;
@@ -314,7 +315,7 @@
     e.preventDefault();
     const body = {
       wanderer_url: form.wanderer_url.value.trim(), wanderer_user: form.wanderer_user.value.trim(),
-      sources: form.sources.value, auto_push: String(form.auto_push.checked),
+      sources: [...form.querySelectorAll("input[name=src]:checked")].map((c) => c.value).join(",") || "usgs", auto_push: String(form.auto_push.checked),
       min_length_m: form.min_length_m.value, cache_days: form.cache_days.value,
     };
     if (form.wanderer_api_key.value) body.wanderer_api_key = form.wanderer_api_key.value.trim();

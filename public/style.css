@@ -78,3 +78,5 @@ summary { cursor: pointer; color: var(--muted); font-size: 13px; }
   .map-tools { right: 10px; }
   .tabs button { font-size: 13px; padding: 8px 6px; }
 }
+fieldset.sources { border: 1px solid var(--line); border-radius: 8px; margin: 8px 0; padding: 4px 10px; }
+fieldset.sources legend { color: var(--muted); font-size: 13px; padding: 0 4px; }

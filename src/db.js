@@ -77,16 +77,24 @@ const DEFAULTS = {
   wanderer_user: process.env.WANDERER_USER || "",
   wanderer_password: process.env.WANDERER_PASSWORD || "",
   auto_push: process.env.AUTO_PUSH ?? "true",
-  sources: process.env.SOURCES || "usgs,osm",
+  sources: process.env.SOURCES || "usgs,nps,usfs,osm",
   include_unnamed: "false",
   min_length_m: process.env.MIN_LENGTH_M || "400",
   cache_days: process.env.CACHE_DAYS || "90",
 };
 
+// v2 added NPS and USFS. Old saved default "usgs,osm" gets the new sources.
+if (!db.prepare("SELECT 1 FROM settings WHERE key='sources_v2'").get()) {
+  db.prepare("UPDATE settings SET value='usgs,nps,usfs,osm' WHERE key='sources' AND value='usgs,osm'").run();
+  db.prepare("INSERT INTO settings(key,value) VALUES('sources_v2','1')").run();
+}
+
 export function getSettings() {
   const rows = db.prepare("SELECT key, value FROM settings").all();
   const s = { ...DEFAULTS };
-  for (const r of rows) if (r.value !== null && r.value !== "") s[r.key] = r.value;
+  for (const r of rows) if (r.key in DEFAULTS && r.value !== null && r.value !== "") s[r.key] = r.value;
+  // env SOURCES from an older compose file ("usgs,osm") also gets the new sources
+  if (!rows.some((r) => r.key === "sources") && /^usgs,osm$/.test(s.sources)) s.sources = "usgs,nps,usfs,osm";
   return s;
 }
 

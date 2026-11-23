@@ -12,7 +12,7 @@ services:
       WANDERER_URL: "http://192.168.1.10:3000"   # your Wanderer web URL
       WANDERER_API_KEY: ""                        # Wanderer -> Settings -> API -> new token
       AUTO_PUSH: "true"
-      SOURCES: "usgs,osm"
+      SOURCES: "usgs,nps,usfs,osm"
       # APP_PASSWORD: "change-me"                 # optional login for this app
     volumes:
       - /DATA/AppData/trail-fetcher:/data
@@ -23,6 +23,6 @@ services:
       title:
         en_us: Trail Fetcher
       description:
-        en_us: Finds trails (USGS, OpenStreetMap, GPX) and imports them into Wanderer.
+        en_us: Finds trails (USGS, NPS, USFS, OpenStreetMap, GPX) and imports them into Wanderer.
       icon: https://raw.githubusercontent.com/daviied/some-trails/main/public/icons/icon-192.png
       port_map: "3010"

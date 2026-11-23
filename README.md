@@ -19,8 +19,13 @@ The job continues on the server when you close the app. A state takes hours for 
 | Priority | Source | Area | Notes |
 |---|---|---|---|
 | 1 | USGS National Digital Trails | USA | Public domain. Best for federal and state land. |
-| 2 | OpenStreetMap (Overpass API) | World | ODbL. Fills gaps (for example, city parks). OSM trails with the same name as a USGS trail are skipped. |
-| 3 | GPX upload | Any | Exports from AllTrails, Gaia, Strava, or a GPS. |
+| 2 | National Park Service – NPS Public Trails | US national parks | Public domain. |
+| 3 | US Forest Service – National Forest System Trails | US national forests | Public domain. Land trails only (no snow or water trails). |
+| 4 | OpenStreetMap (Overpass API) | World | ODbL. Fills gaps (for example, city parks). |
+| – | GPX upload | Any | Exports from AllTrails, Gaia, Strava, or a GPS. |
+
+If two sources have a trail with the same name in the same place, the app keeps the one from the
+higher source and marks the other "Skipped".
 
 AllTrails has no public API, and its terms do not allow scraping. To add AllTrails routes, download
 the GPX in AllTrails and drop it on the **Upload** tab.
@@ -52,7 +57,7 @@ the app works but the install option may not show. Use a reverse proxy with HTTP
 | `WANDERER_API_KEY` | – | Wanderer API token (preferred) |
 | `WANDERER_USER` / `WANDERER_PASSWORD` | – | Use these if you have no token |
 | `AUTO_PUSH` | `true` | Import new trails into Wanderer automatically |
-| `SOURCES` | `usgs,osm` | Sources in priority order |
+| `SOURCES` | `usgs,nps,usfs,osm` | Sources in priority order |
 | `MIN_LENGTH_M` | `400` | Skip shorter trails |
 | `CACHE_DAYS` | `90` | Download an area again after this many days |
 | `APP_PASSWORD` | – | Login password for this app (any user name) |

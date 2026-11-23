@@ -1,7 +1,7 @@
 // Fetch jobs (internet -> local cache) and the push queue (local cache -> Wanderer).
 import { db, getSettings, now } from "./db.js";
 import { tilesForBbox, assembleTrails, bboxOfLines, bboxIntersects, lineLength, normName, simplify } from "./geo.js";
-import { fetchUsgsTile } from "./sources/usgs.js";
+import { fetchArcgis, LAYERS } from "./sources/arcgis.js";
 import { fetchOsmTile } from "./sources/osm.js";
 import { buildGpx } from "./gpx.js";
 import { uploadGpx, wandererConfigured } from "./wanderer.js";
@@ -10,7 +10,9 @@ import { sleep, withTimeout } from "./http.js";
 export const state = { jobRunning: false, pushRunning: false, pushPaused: "", currentJob: null, lastPushError: "" };
 
 const SOURCES = {
-  usgs: { label: "USGS", fetch: fetchUsgsTile, delay: 300 },
+  usgs: { label: "USGS", fetch: (b) => fetchArcgis("usgs", b), delay: 300, block: true },
+  nps: { label: "NPS", fetch: (b) => fetchArcgis("nps", b), delay: 300, block: true },
+  usfs: { label: "USFS", fetch: (b) => fetchArcgis("usfs", b), delay: 300, block: true },
   osm: { label: "OpenStreetMap", fetch: fetchOsmTile, delay: 1500 },
 };
 
@@ -130,13 +132,13 @@ async function runJob(job) {
     const todo = blk.tiles.filter((t) => !fresh(src, t));
     j.done += blk.tiles.length - todo.length;
     if (!todo.length) return;
-    if (src === "usgs") {
+    if (SOURCES[src].block) {
       const bb = {
         minLon: Math.min(...todo.map((t) => t.minLon)), minLat: Math.min(...todo.map((t) => t.minLat)),
         maxLon: Math.max(...todo.map((t) => t.maxLon)), maxLat: Math.max(...todo.map((t) => t.maxLat)),
       };
       try {
-        const res = await withTimeout(SOURCES[src].fetch(bb), TILE_TIMEOUT_MS * 2, "USGS block took too long");
+        const res = await withTimeout(SOURCES[src].fetch(bb), TILE_TIMEOUT_MS * 2, `${SOURCES[src].label} block took too long`);
         storeTiles(src, todo, res);
       } catch (e) { fail(src, todo, e); }
       j.done += todo.length;
@@ -248,14 +250,15 @@ function buildTrails(bbox, sources, queue) {
         count++;
       }
     }
-    // USGS wins. Skip OSM/other trails with the same name in the same place.
+    // Source order = priority. Skip a trail when a higher source has the same name in the same place.
+    const rank = (src) => { const i = sources.indexOf(src); return i < 0 ? 99 : i; };
     const rows = q.trailsIn.all(bbox.minLon - pad, bbox.maxLon + pad, bbox.minLat - pad, bbox.maxLat + pad);
-    const usgs = rows.filter((r) => r.source === "usgs");
     for (const r of rows) {
-      if (r.source !== "osm" || ["pushed", "duplicate", "skipped"].includes(r.push_status)) continue;
+      if (r.source === "upload" || ["pushed", "duplicate", "skipped"].includes(r.push_status)) continue;
       const nn = normName(r.name);
-      const twin = usgs.find((u) => normName(u.name) === nn && bboxIntersects(rowBox(u), rowBox(r)));
-      if (twin) q.pushSet.run("skipped", `Same as USGS trail #${twin.id}`, null, null, r.id);
+      const twin = rows.find((u) => u.id !== r.id && u.source !== r.source && rank(u.source) < rank(r.source) &&
+        u.push_status !== "skipped" && normName(u.name) === nn && bboxIntersects(rowBox(u), rowBox(r)));
+      if (twin) q.pushSet.run("skipped", `Same as ${SOURCES[twin.source]?.label || twin.source} trail #${twin.id}`, null, null, r.id);
     }
   });
   tx();
@@ -295,7 +298,7 @@ export function kickPush() {
 }
 
 function describe(t, meta) {
-  const src = { usgs: "USGS National Digital Trails", osm: "OpenStreetMap contributors (ODbL)", upload: "GPX upload" }[t.source] || t.source;
+  const src = LAYERS[t.source]?.label || { osm: "OpenStreetMap contributors (ODbL)", upload: "GPX upload" }[t.source] || t.source;
   const parts = [];
   if (meta.description) parts.push(meta.description);
   if (meta.trailnumber) parts.push(`Trail number: ${meta.trailnumber}`);
@@ -303,6 +306,9 @@ function describe(t, meta) {
   if (meta.maintainer) parts.push(`Maintainer: ${meta.maintainer}`);
   if (meta.operator) parts.push(`Operator: ${meta.operator}`);
   if (meta.national) parts.push(`Designation: ${meta.national}`);
+  if (meta.park) parts.push(`Park: ${meta.park}`);
+  if (meta.area) parts.push(`Area: ${meta.area}`);
+  if (meta.seasonal) parts.push(`Seasonal: ${meta.seasonal}`);
   if (meta.osm) parts.push(meta.osm);
   parts.push(`Source: ${src}`);
   return parts.join("\n");
