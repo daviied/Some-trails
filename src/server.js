@@ -178,7 +178,7 @@ app.post("/api/upload", upload.array("files"), (req, res) => {
   res.json(results);
 });
 
-const PUBLIC_SETTINGS = ["wanderer_url", "auto_push", "sources", "min_length_m", "cache_days", "wanderer_user"];
+const PUBLIC_SETTINGS = ["wanderer_url", "auto_push", "sources", "min_length_m", "cache_days", "wanderer_user", "include_unnamed", "dedupe_wanderer"];
 app.get("/api/settings", (req, res) => {
   const s = getSettings();
   const out = Object.fromEntries(PUBLIC_SETTINGS.map((k) => [k, s[k]]));
@@ -210,6 +210,11 @@ app.post("/api/settings/test", async (req, res) => {
 });
 
 app.get("/healthz", (req, res) => res.send("ok"));
+
+// Keep the server running if one network socket fails in an unexpected way (seen in Node's fetch
+// after a timeout). The job that used the socket gets a timeout error and continues.
+process.on("uncaughtException", (e) => console.error("Uncaught error (server continues):", e));
+process.on("unhandledRejection", (e) => console.error("Unhandled rejection (server continues):", e));
 
 const PORT = Number(process.env.PORT || 3000);
 app.listen(PORT, () => {

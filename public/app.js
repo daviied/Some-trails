@@ -307,6 +307,8 @@
     const on = String(s.sources).split(",");
     form.querySelectorAll("input[name=src]").forEach((c) => (c.checked = on.includes(c.value)));
     form.auto_push.checked = s.auto_push === "true";
+    form.include_unnamed.checked = s.include_unnamed === "true";
+    form.dedupe_wanderer.checked = s.dedupe_wanderer !== "false";
     form.min_length_m.value = s.min_length_m;
     form.cache_days.value = s.cache_days;
     if (!s.wanderer_url) { switchTab("settings"); $("#settingsMsg").textContent = "Add your Wanderer URL and API key to start."; }
@@ -315,7 +317,7 @@
     e.preventDefault();
     const body = {
       wanderer_url: form.wanderer_url.value.trim(), wanderer_user: form.wanderer_user.value.trim(),
-      sources: [...form.querySelectorAll("input[name=src]:checked")].map((c) => c.value).join(",") || "usgs", auto_push: String(form.auto_push.checked),
+      sources: [...form.querySelectorAll("input[name=src]:checked")].map((c) => c.value).join(",") || "usgs", auto_push: String(form.auto_push.checked), include_unnamed: String(form.include_unnamed.checked), dedupe_wanderer: String(form.dedupe_wanderer.checked),
       min_length_m: form.min_length_m.value, cache_days: form.cache_days.value,
     };
     if (form.wanderer_api_key.value) body.wanderer_api_key = form.wanderer_api_key.value.trim();

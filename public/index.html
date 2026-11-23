@@ -102,6 +102,9 @@
           <label class="check"><input type="checkbox" name="src" value="osm"> OpenStreetMap (world)</label>
         </fieldset>
         <label class="check"><input type="checkbox" name="auto_push"> Auto-import new trails into Wanderer</label>
+        <label class="check"><input type="checkbox" name="include_unnamed"> Include unnamed trails</label>
+        <div class="small">After you change this, select “Run again” on a job to update that area.</div>
+        <label class="check"><input type="checkbox" name="dedupe_wanderer"> Do not upload trails that are already in Wanderer</label>
         <label>Skip trails shorter than (m) <input name="min_length_m" type="number" min="0"></label>
         <label>Fetch again after (days) <input name="cache_days" type="number" min="1"></label>
         <div class="row">

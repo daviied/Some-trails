@@ -1,5 +1,6 @@
 // Client for the Wanderer API (https://github.com/Flomp/wanderer).
 import { getSettings } from "./db.js";
+import { haversine, normName } from "./geo.js";
 
 let cookieCache = { key: "", cookie: "", at: 0 };
 
@@ -75,3 +76,44 @@ export function trailUrl(id) {
 }
 
 const safeFile = (n) => String(n || "trail").replace(/[^\w\- ]+/g, "").trim().slice(0, 80) || "trail";
+
+/**
+ * Look in Wanderer for a trail that is the same as this one (also trails added by hand).
+ * Same trail = same name in the same area, or about the same length starting at the same place.
+ * Returns {id, name} or null. Errors return null, so an old Wanderer version does not stop uploads.
+ */
+export async function findWandererDuplicate(t, lines, meta = {}) {
+  const s = getSettings();
+  const pad = 0.003;
+  const filter = `min_lat <= ${t.max_lat + pad} AND max_lat >= ${t.min_lat - pad} AND min_lon <= ${t.max_lon + pad} AND max_lon >= ${t.min_lon - pad}`;
+  let hits;
+  try {
+    const res = await fetch(`${base(s)}/api/v1/search/trails`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(await authHeaders(s)) },
+      body: JSON.stringify({
+        q: "",
+        options: { filter, limit: 200, attributesToRetrieve: ["id", "name", "distance", "min_lat", "max_lat", "min_lon", "max_lon", "_geo"] },
+      }),
+    });
+    if (!res.ok) return null;
+    hits = (await res.json()).hits || [];
+  } catch {
+    return null;
+  }
+  const nn = meta.unnamed ? "" : normName(t.name);
+  const start = lines[0][0], end = lines[lines.length - 1].at(-1);
+  const area = (b) => Math.max(1e-12, (b.max_lat - b.min_lat) * (b.max_lon - b.min_lon));
+  for (const h of hits) {
+    if (h.min_lat == null) continue;
+    const ix = Math.max(0, Math.min(t.max_lon, h.max_lon) - Math.max(t.min_lon, h.min_lon));
+    const iy = Math.max(0, Math.min(t.max_lat, h.max_lat) - Math.max(t.min_lat, h.min_lat));
+    const overlap = (ix * iy) / Math.min(area(t), area(h)); // 1 = one box inside the other
+    const sameName = nn && normName(h.name) === nn;
+    const sameLen = h.distance > 0 && Math.abs(h.distance - t.length_m) <= Math.max(150, 0.15 * t.length_m);
+    const g = h._geo;
+    const sameStart = g && Math.min(haversine(start, [g.lng, g.lat]), haversine(end, [g.lng, g.lat])) <= 200;
+    if ((sameName && overlap > 0.3) || (sameLen && sameStart && overlap > 0.6)) return { id: h.id, name: h.name };
+  }
+  return null;
+}

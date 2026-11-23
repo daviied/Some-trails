@@ -69,12 +69,12 @@ export function normName(s) {
 }
 
 /**
- * Group segments with the same name into connected trails, then chain each group
+ * Group segments with the same name that are near each other into one trail, then chain each group
  * into as few continuous lines as possible.
  * segs: [{id, name, line:[[lon,lat],...], meta}]
  * returns: [{name, segIds:[...], lines:[[...]], meta}]
  */
-export function assembleTrails(segs, joinMeters = 60) {
+export function assembleTrails(segs, joinMeters = 60, groupMeters = Number(process.env.TRAIL_GROUP_M || 8000)) {
   const byName = new Map();
   for (const s of segs) {
     if (!s.line || s.line.length < 2) continue;
@@ -92,7 +92,8 @@ export function assembleTrails(segs, joinMeters = 60) {
     for (let i = 0; i < group.length; i++)
       for (let j = i + 1; j < group.length; j++) {
         if (find(i) === find(j)) continue;
-        const near = ends[i].some((a) => ends[j].some((b) => haversine(a, b) <= joinMeters));
+        // pieces of one trail with gaps (up to groupMeters) stay one trail with several parts
+        const near = ends[i].some((a) => ends[j].some((b) => haversine(a, b) <= groupMeters));
         if (near) parent[find(i)] = find(j);
       }
     const comps = new Map();
@@ -174,4 +175,84 @@ export function simplify(line, tol = 0.00002) {
     if (maxD > t2) { keep[idx] = 1; stack.push([f, idx], [idx, l]); }
   }
   return line.filter((_, i) => keep[i]);
+}
+
+/**
+ * Join unnamed segments into trails. Two segments join only where they meet end to end
+ * and no third segment touches that point (no junction), so path networks do not become one trail.
+ */
+export function assembleUnnamed(segs) {
+  const list = segs.filter((s) => s.line && s.line.length > 1);
+  const key = (p) => `${p[0].toFixed(5)},${p[1].toFixed(5)}`;
+  const at = new Map();
+  list.forEach((s, i) => {
+    for (const p of [s.line[0], s.line[s.line.length - 1]]) {
+      const k = key(p);
+      if (!at.has(k)) at.set(k, []);
+      at.get(k).push(i);
+    }
+  });
+  const parent = list.map((_, i) => i);
+  const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  for (const ids of at.values()) if (ids.length === 2 && ids[0] !== ids[1]) parent[find(ids[0])] = find(ids[1]);
+  const comps = new Map();
+  list.forEach((s, i) => {
+    const r = find(i);
+    if (!comps.has(r)) comps.set(r, []);
+    comps.get(r).push(s);
+  });
+  return [...comps.values()].map((c) => ({
+    segIds: c.map((s) => s.id).sort(),
+    lines: chainLines(c.map((s) => s.line), 2),
+    meta: c[0].meta || {},
+  }));
+}
+
+// Points every `step` meters along a line (vertices included).
+export function densify(line, step = 20) {
+  const out = [line[0]];
+  for (let i = 1; i < line.length; i++) {
+    const a = line[i - 1], b = line[i];
+    const d = haversine(a, b);
+    const n = Math.floor(d / step);
+    for (let k = 1; k <= n; k++) {
+      const t = (k * step) / d;
+      if (t < 1) out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+    }
+    out.push(b);
+  }
+  return out;
+}
+
+/** Grid index of points along trails. Answers: how much of this trail lies on trails already kept? */
+export class PointIndex {
+  constructor(cell = 0.0006) { this.cell = cell; this.m = new Map(); }
+  _k(x, y) { return `${Math.floor(x / this.cell)}:${Math.floor(y / this.cell)}`; }
+  add(lines, owner) {
+    for (const l of lines)
+      for (const p of densify(l, 20)) {
+        const k = this._k(p[0], p[1]);
+        if (!this.m.has(k)) this.m.set(k, []);
+        this.m.get(k).push([p[0], p[1], owner]);
+      }
+  }
+  // returns {frac: 0..1 of the trail within tol meters of kept trails, owner: most common kept trail}
+  coverage(lines, tol = 30) {
+    let total = 0, hit = 0;
+    const owners = new Map();
+    for (const l of lines)
+      for (const p of densify(l, 40)) {
+        total++;
+        const cx = Math.floor(p[0] / this.cell), cy = Math.floor(p[1] / this.cell);
+        let found = null;
+        for (let dx = -1; dx <= 1 && !found; dx++)
+          for (let dy = -1; dy <= 1 && !found; dy++)
+            for (const q of this.m.get(`${cx + dx}:${cy + dy}`) || [])
+              if (haversine(p, q) <= tol) { found = q; break; }
+        if (found) { hit++; owners.set(found[2], (owners.get(found[2]) || 0) + 1); }
+      }
+    let owner = null, best = 0;
+    for (const [o, n] of owners) if (n > best) { best = n; owner = o; }
+    return { frac: total ? hit / total : 0, owner };
+  }
 }

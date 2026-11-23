@@ -1,10 +1,10 @@
 // Fetch jobs (internet -> local cache) and the push queue (local cache -> Wanderer).
 import { db, getSettings, now } from "./db.js";
-import { tilesForBbox, assembleTrails, bboxOfLines, bboxIntersects, lineLength, normName, simplify } from "./geo.js";
+import { tilesForBbox, assembleTrails, assembleUnnamed, PointIndex, bboxOfLines, bboxIntersects, lineLength, normName, simplify } from "./geo.js";
 import { fetchArcgis, LAYERS } from "./sources/arcgis.js";
 import { fetchOsmTile } from "./sources/osm.js";
 import { buildGpx } from "./gpx.js";
-import { uploadGpx, wandererConfigured } from "./wanderer.js";
+import { uploadGpx, wandererConfigured, findWandererDuplicate } from "./wanderer.js";
 import { sleep, withTimeout } from "./http.js";
 
 export const state = { jobRunning: false, pushRunning: false, pushPaused: "", currentJob: null, lastPushError: "" };
@@ -13,8 +13,14 @@ const SOURCES = {
   usgs: { label: "USGS", fetch: (b) => fetchArcgis("usgs", b), delay: 300, block: true },
   nps: { label: "NPS", fetch: (b) => fetchArcgis("nps", b), delay: 300, block: true },
   usfs: { label: "USFS", fetch: (b) => fetchArcgis("usfs", b), delay: 300, block: true },
-  osm: { label: "OpenStreetMap", fetch: fetchOsmTile, delay: 1500 },
+  osm: { label: "OpenStreetMap", fetch: (t) => fetchOsmTile(t, { unnamed: unnamedOn() }), delay: 1500 },
 };
+
+const unnamedOn = () => getSettings().include_unnamed === "true";
+
+// OSM tiles fetched with unnamed paths are cached under "osm_all" (they also cover "osm").
+const tileKeysRead = (src) => (src === "osm" ? (unnamedOn() ? ["osm_all"] : ["osm", "osm_all"]) : [src]);
+const tileKeyWrite = (src) => (src === "osm" && unnamedOn() ? "osm_all" : src);
 
 export const MAX_TILES = Number(process.env.MAX_JOB_TILES || 6000);
 
@@ -56,7 +62,7 @@ export function tileCoverage(bbox) {
   const tiles = tilesForBbox(bbox);
   let cached = 0;
   for (const t of tiles) {
-    if (sources.every((src) => { const r = q.tileGet.get(src, t.key); return r && now() - r.fetched_at < ttl; })) cached++;
+    if (sources.every((src) => tileKeysRead(src).some((k) => { const r = q.tileGet.get(k, t.key); return r && now() - r.fetched_at < ttl; }))) cached++;
   }
   return { tiles: tiles.length, cached };
 }
@@ -119,11 +125,11 @@ async function runJob(job) {
   const save = () => { j.updated_at = now(); q.jobUpd.run(j); };
   save();
   const errors = [];
-  const fresh = (src, t) => { const c = q.tileGet.get(src, t.key); return c && now() - c.fetched_at < ttl; };
+  const fresh = (src, t) => tileKeysRead(src).some((k) => { const c = q.tileGet.get(k, t.key); return c && now() - c.fetched_at < ttl; });
   const fail = (src, ts, e) => {
     errors.push(`${src}: ${e.message}`);
     // remember the failure for 1 hour so browsing does not retry it on every map move
-    for (const t of ts) q.tilePut.run(src, t.key, now() - ttl + 3600e3, -1);
+    for (const t of ts) q.tilePut.run(tileKeyWrite(src), t.key, now() - ttl + 3600e3, -1);
     console.warn(`[job ${job.id}] ${src} failed:`, e.message);
   };
 
@@ -203,7 +209,7 @@ const storeTiles = db.transaction((src, tiles, res) => {
   const routes = Array.isArray(res) ? [] : res.routes || [];
   const autoQ = getSettings().auto_push === "true";
   for (const r of routes) upsertTrail(src, r.key, r.name, r.lines, r.meta, autoQ ? "queued" : "new");
-  for (const t of tiles) q.tilePut.run(src, t.key, now(), segs.length + routes.length);
+  for (const t of tiles) q.tilePut.run(tileKeyWrite(src), t.key, now(), segs.length + routes.length);
 });
 
 function upsertTrail(source, key, name, lines, meta, status) {
@@ -217,7 +223,7 @@ function upsertTrail(source, key, name, lines, meta, status) {
     meta: JSON.stringify(meta || {}), fetched_at: now(), push_status: status,
   };
   let existing = q.trailByKey.get(source, key);
-  if (!existing) {
+  if (!existing && !meta?.unnamed) {
     // same trail found earlier with a different key (it grew across tiles)
     const nn = normName(name);
     existing = q.trailsIn.all(b.minLon, b.maxLon, b.minLat, b.maxLat)
@@ -231,38 +237,77 @@ function upsertTrail(source, key, name, lines, meta, status) {
   return q.trailIns.run(row).lastInsertRowid;
 }
 
-// Assemble stored segments into trails for an area, then mark OSM copies of USGS trails.
+// Assemble stored segments into trails for an area, then remove duplicates.
 function buildTrails(bbox, sources, queue) {
   const s = getSettings();
   const minLen = Number(s.min_length_m) || 0;
+  const unnamed = s.include_unnamed === "true";
   const pad = 0.05;
   let count = 0;
   const tx = db.transaction(() => {
     for (const src of sources) {
       const segs = q.segsIn.all(src, bbox.minLon - pad, bbox.maxLon + pad, bbox.minLat - pad, bbox.maxLat + pad)
         .map((r) => ({ id: r.seg_id, name: r.name, line: JSON.parse(r.line), meta: JSON.parse(r.meta || "{}") }));
-      for (const t of assembleTrails(segs)) {
-        const len = t.lines.reduce((a, l) => a + lineLength(l), 0);
-        if (len < minLen) continue;
-        const b = bboxOfLines(t.lines);
-        if (!bboxIntersects(b, bbox)) continue;
-        upsertTrail(src, `${normName(t.name)}|${t.segIds[0]}`, t.name, t.lines, { ...t.meta, segments: t.segIds.length }, queue ? "queued" : "new");
+      const add = (key, name, lines, meta) => {
+        const len = lines.reduce((acc, l) => acc + lineLength(l), 0);
+        if (len < minLen) return;
+        if (!bboxIntersects(bboxOfLines(lines), bbox)) return;
+        upsertTrail(src, key, name, lines, meta, queue ? "queued" : "new");
         count++;
-      }
+      };
+      for (const t of assembleTrails(segs))
+        add(`${normName(t.name)}|${t.segIds[0]}`, t.name, t.lines, { ...t.meta, segments: t.segIds.length });
+      if (unnamed)
+        for (const t of assembleUnnamed(segs.filter((x) => !normName(x.name))))
+          add(`unnamed|${t.segIds[0]}`, unnamedName(t.meta), t.lines, { ...t.meta, unnamed: true, segments: t.segIds.length });
     }
-    // Source order = priority. Skip a trail when a higher source has the same name in the same place.
-    const rank = (src) => { const i = sources.indexOf(src); return i < 0 ? 99 : i; };
-    const rows = q.trailsIn.all(bbox.minLon - pad, bbox.maxLon + pad, bbox.minLat - pad, bbox.maxLat + pad);
-    for (const r of rows) {
-      if (r.source === "upload" || ["pushed", "duplicate", "skipped"].includes(r.push_status)) continue;
-      const nn = normName(r.name);
-      const twin = rows.find((u) => u.id !== r.id && u.source !== r.source && rank(u.source) < rank(r.source) &&
-        u.push_status !== "skipped" && normName(u.name) === nn && bboxIntersects(rowBox(u), rowBox(r)));
-      if (twin) q.pushSet.run("skipped", `Same as ${SOURCES[twin.source]?.label || twin.source} trail #${twin.id}`, null, null, r.id);
-    }
+    dedupe(bbox, sources, pad);
   });
   tx();
   return count;
+}
+
+const DUP_OVERLAP = Number(process.env.DUP_OVERLAP || 0.8);
+
+function unnamedName(meta) {
+  const kind = { path: "path", footway: "footpath", bridleway: "bridle path", track: "track", steps: "steps" }[meta.highway];
+  return `Unnamed ${kind || "trail"}`;
+}
+
+/**
+ * Keep one copy of each trail. Order: trails already in Wanderer, then by source priority,
+ * named before unnamed, longer first. A trail is skipped when
+ *  - a kept trail from another source has the same name in the same place, or
+ *  - DUP_OVERLAP (80%) or more of it lies within 30 m of kept trails.
+ */
+function dedupe(bbox, sources, pad) {
+  const rank = (src) => { const i = sources.indexOf(src); return i < 0 ? 99 : i; };
+  const isUnnamed = (r) => (JSON.parse(r.meta || "{}").unnamed ? 1 : 0);
+  const rows = q.trailsIn.all(bbox.minLon - pad, bbox.maxLon + pad, bbox.minLat - pad, bbox.maxLat + pad);
+  const idx = new PointIndex();
+  const byName = new Map();
+  const keep = (r) => {
+    idx.add(JSON.parse(r.lines), r.id);
+    const nn = normName(r.name);
+    if (nn && !isUnnamed(r)) { if (!byName.has(nn)) byName.set(nn, []); byName.get(nn).push(r); }
+  };
+  for (const r of rows) if (r.source === "upload" || ["pushed", "duplicate"].includes(r.push_status)) keep(r);
+  const cands = rows
+    .filter((r) => r.source !== "upload" && ["new", "queued", "error"].includes(r.push_status))
+    .sort((a, b) => rank(a.source) - rank(b.source) || isUnnamed(a) - isUnnamed(b) || b.length_m - a.length_m);
+  const label = (id) => { const r = rows.find((x) => x.id === id); return r ? `${SOURCES[r.source]?.label || r.source} trail #${id} "${r.name}"` : `trail #${id}`; };
+  for (const r of cands) {
+    if (!isUnnamed(r)) {
+      const twin = (byName.get(normName(r.name)) || []).find((u) => u.source !== r.source && bboxIntersects(rowBox(u), rowBox(r)));
+      if (twin) { q.pushSet.run("skipped", `Same as ${label(twin.id)}`, null, null, r.id); continue; }
+    }
+    const cov = idx.coverage(JSON.parse(r.lines));
+    if (cov.frac >= DUP_OVERLAP) {
+      q.pushSet.run("skipped", `${Math.round(cov.frac * 100)}% overlaps ${label(cov.owner)}`, null, null, r.id);
+      continue;
+    }
+    keep(r);
+  }
 }
 
 function rowBox(r) { return { minLon: r.min_lon, maxLon: r.max_lon, minLat: r.min_lat, maxLat: r.max_lat }; }
@@ -279,6 +324,13 @@ export function kickPush() {
         try {
           const lines = JSON.parse(t.lines);
           const meta = JSON.parse(t.meta || "{}");
+          if (getSettings().dedupe_wanderer !== "false") {
+            const dup = await findWandererDuplicate(t, lines, meta);
+            if (dup) {
+              q.pushSet.run("duplicate", `Already in Wanderer: "${dup.name}"`, dup.id, now(), t.id);
+              continue;
+            }
+          }
           const gpx = buildGpx({ name: t.name, desc: describe(t, meta), lines });
           const r = await uploadGpx(gpx, t.name);
           q.pushSet.run(r.status, null, r.id || null, now(), t.id);

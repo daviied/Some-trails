@@ -24,8 +24,17 @@ The job continues on the server when you close the app. A state takes hours for 
 | 4 | OpenStreetMap (Overpass API) | World | ODbL. Fills gaps (for example, city parks). |
 | – | GPX upload | Any | Exports from AllTrails, Gaia, Strava, or a GPS. |
 
-If two sources have a trail with the same name in the same place, the app keeps the one from the
-higher source and marks the other "Skipped".
+### Duplicates
+
+The app does three checks, so the same trail does not go into Wanderer two times:
+
+1. **Same name, same place, other source:** the app keeps the trail from the higher source.
+2. **Same path:** if 80% or more of a trail is within 30 m of a trail that is already kept, the app skips it.
+   This also finds copies with different names.
+3. **Already in Wanderer:** before each upload, the app searches Wanderer (also trails you added by hand).
+   Same name in the same area, or same length from the same start, shows "Already in Wanderer".
+
+Skipped trails show the reason in the trail pop-up.
 
 AllTrails has no public API, and its terms do not allow scraping. To add AllTrails routes, download
 the GPX in AllTrails and drop it on the **Upload** tab.
@@ -64,6 +73,10 @@ the app works but the install option may not show. Use a reverse proxy with HTTP
 | `AUTO_FETCH_MAX_TILES` | `16` | Largest view (in 0.25° tiles) that downloads automatically while you browse |
 | `MAX_JOB_TILES` | `6000` | Largest area import |
 | `OVERPASS_URLS` | 3 public servers | Comma-separated Overpass servers |
+| `INCLUDE_UNNAMED` | `false` | Also import trails that have no name (mostly OpenStreetMap paths) |
+| `DEDUPE_WANDERER` | `true` | Before each upload, check Wanderer for the same trail |
+| `DUP_OVERLAP` | `0.8` | Skip a trail when this part of it lies on a trail that is already kept |
+| `TRAIL_GROUP_M` | `8000` | Pieces of a trail with the same name within this distance become one trail |
 | `PUSH_DELAY_MS` | `200` | Wait time between uploads to Wanderer |
 
 The Settings tab can change most of these values. Values set there override the environment.

@@ -59,3 +59,39 @@ test("overpass response parse", () => {
   assert.equal(r.routes[0].lines.length, 1);
   assert.deepEqual(r.segments.map((s) => s.id), ["way/2"]);
 });
+
+import { assembleUnnamed, PointIndex } from "../src/geo.js";
+
+test("unnamed segments join only where there is no junction", () => {
+  const t = assembleUnnamed([
+    { id: "a", line: [[0, 0], [0.001, 0]] },
+    { id: "b", line: [[0.001, 0], [0.002, 0]] },      // a-b chain (2 at point)
+    { id: "c", line: [[0.002, 0], [0.002, 0.001]] },  // b, c, d meet -> junction
+    { id: "d", line: [[0.002, 0], [0.003, 0]] },
+  ]);
+  const ab = t.find((x) => x.segIds.includes("a"));
+  assert.deepEqual(ab.segIds, ["a", "b"]);
+  assert.equal(t.length, 3);
+});
+
+test("overlap index finds a copy of a trail", () => {
+  const idx = new PointIndex();
+  idx.add([[[-121.7, 46.8], [-121.69, 46.8]]], 1);
+  const same = idx.coverage([[[-121.69, 46.8001], [-121.7, 46.8001]]]); // reversed, 11 m away
+  assert.ok(same.frac > 0.95);
+  assert.equal(same.owner, 1);
+  const other = idx.coverage([[[-121.7, 46.81], [-121.69, 46.81]]]); // 1.1 km away
+  assert.equal(other.frac, 0);
+});
+
+test("pieces of one trail with a gap stay one trail", () => {
+  const t = assembleTrails([
+    { id: "a", name: "Divide Ridge", line: [[0, 0], [0.001, 0]] },
+    { id: "b", name: "Divide Ridge", line: [[0.011, 0], [0.012, 0]] }, // 1.1 km gap
+    { id: "c", name: "Divide Ridge", line: [[0.2, 0], [0.201, 0]] },   // 22 km away: other trail
+  ]);
+  assert.equal(t.length, 2);
+  const ab = t.find((x) => x.segIds.includes("a"));
+  assert.deepEqual(ab.segIds, ["a", "b"]);
+  assert.equal(ab.lines.length, 2);
+});

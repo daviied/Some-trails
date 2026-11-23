@@ -35,12 +35,18 @@ async function overpass(query) {
  *  routes: complete hiking route relations [{key, name, lines, meta}]
  *  segments: named footpaths [{id, name, line, meta}] that are assembled later
  */
-export async function fetchOsmTile(tile) {
+export async function fetchOsmTile(tile, { unnamed = false } = {}) {
   const bb = `${tile.minLat},${tile.minLon},${tile.maxLat},${tile.maxLon}`;
+  // unnamed: paths without a name too (no sidewalks or crossings)
+  const ways = unnamed
+    ? `way["highway"~"^(path|bridleway)$"]["foot"!~"^(no|private)$"]["access"!~"^(no|private)$"](${bb});
+  way["highway"="footway"]["footway"!~"^(sidewalk|crossing|access_aisle)$"]["foot"!~"^(no|private)$"]["access"!~"^(no|private)$"](${bb});
+  way["highway"="steps"]["name"](${bb});`
+    : `way["highway"~"^(path|footway|bridleway|steps)$"]["name"]["foot"!~"^(no|private)$"]["access"!~"^(no|private)$"](${bb});`;
   const q = `[out:json][timeout:170];
 (
   relation["type"="route"]["route"~"^(hiking|foot|walking)$"](${bb});
-  way["highway"~"^(path|footway|bridleway|steps)$"]["name"]["foot"!~"^(no|private)$"]["access"!~"^(no|private)$"](${bb});
+  ${ways}
   way["highway"="track"]["name"~"[Tt]rail"](${bb});
 );
 out geom;`;
@@ -75,12 +81,12 @@ export function parseOverpass(data) {
       const t = el.tags || {};
       segments.push({
         id: `way/${el.id}`,
-        name: t.name,
+        name: t.name || "",
         line: el.geometry.map((p) => [p.lon, p.lat]),
         meta: { surface: t.surface, sac_scale: t.sac_scale, highway: t.highway, operator: t.operator },
       });
     }
   }
   // ways that belong to a named route relation are already covered by that route
-  return { routes, segments: segments.filter((s) => !routeNames.has(String(s.name).toLowerCase())) };
+  return { routes, segments: segments.filter((s) => !s.name || !routeNames.has(String(s.name).toLowerCase())) };
 }

@@ -78,7 +78,8 @@ const DEFAULTS = {
   wanderer_password: process.env.WANDERER_PASSWORD || "",
   auto_push: process.env.AUTO_PUSH ?? "true",
   sources: process.env.SOURCES || "usgs,nps,usfs,osm",
-  include_unnamed: "false",
+  include_unnamed: process.env.INCLUDE_UNNAMED || "false",
+  dedupe_wanderer: process.env.DEDUPE_WANDERER || "true",
   min_length_m: process.env.MIN_LENGTH_M || "400",
   cache_days: process.env.CACHE_DAYS || "90",
 };
