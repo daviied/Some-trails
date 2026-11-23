@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Trail Fetcher</title>
+<meta name="theme-color" content="#2f6b3b">
+<meta name="description" content="Find trails and import them into Wanderer">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="bar">
+  <form id="searchForm" class="search" autocomplete="off">
+    <input id="searchInput" type="search" placeholder="Search a place or trail (e.g. Phoenix, Washington)" aria-label="Search">
+    <button type="submit" class="btn primary">Go</button>
+  </form>
+  <div id="placeResults" class="dropdown" hidden></div>
+</header>
+
+<main>
+  <div id="map"></div>
+  <div class="map-tools">
+    <button id="boxBtn" class="btn tool" title="Show the area box">▭ Area box</button>
+    <button id="locBtn" class="btn tool" title="My location">◎</button>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+
+  <aside id="panel" class="panel">
+    <div class="grip" id="grip"></div>
+    <nav class="tabs" role="tablist">
+      <button data-tab="trails" class="active">Trails</button>
+      <button data-tab="area">Area import</button>
+      <button data-tab="jobs">Jobs</button>
+      <button data-tab="upload">Upload</button>
+      <button data-tab="settings">Settings</button>
+    </nav>
+
+    <section id="tab-trails" class="tab active">
+      <div id="coverage" class="note"></div>
+      <div class="row">
+        <input id="filterInput" type="search" placeholder="Filter by name">
+        <select id="statusFilter">
+          <option value="">All</option>
+          <option value="pushed">In Wanderer</option>
+          <option value="queued">Queued</option>
+          <option value="new">Not pushed</option>
+          <option value="duplicate">Duplicate</option>
+          <option value="skipped">Skipped</option>
+          <option value="error">Error</option>
+        </select>
+      </div>
+      <ul id="trailList" class="list"></ul>
+    </section>
+
+    <section id="tab-area" class="tab">
+      <p>Move and resize the box on the map. Then import all trails in it. Big areas (a state) take a long time. The job continues on the server if you close the app.</p>
+      <label>Name <input id="areaLabel" placeholder="e.g. Phoenix"></label>
+      <div id="areaInfo" class="note"></div>
+      <label class="check"><input type="checkbox" id="areaPush" checked> Push to Wanderer when done</label>
+      <div class="row">
+        <button id="areaFitBtn" class="btn">Box = screen</button>
+        <button id="areaImportBtn" class="btn primary">Import trails in box</button>
+      </div>
+      <div class="row">
+        <button id="areaPushBtn" class="btn">Push cached trails in box</button>
+      </div>
+    </section>
+
+    <section id="tab-jobs" class="tab">
+      <div id="statusBox" class="note"></div>
+      <ul id="jobList" class="list"></ul>
+    </section>
+
+    <section id="tab-upload" class="tab">
+      <p>Drop GPX files here. Use this for trails you export from AllTrails, Gaia, Strava, or your own GPS.</p>
+      <label id="dropZone" class="drop">
+        <input id="fileInput" type="file" accept=".gpx,application/gpx+xml" multiple hidden>
+        <span>Drop GPX files or tap to select</span>
+      </label>
+      <ul id="uploadList" class="list"></ul>
+    </section>
+
+    <section id="tab-settings" class="tab">
+      <form id="settingsForm">
+        <label>Wanderer URL <input name="wanderer_url" placeholder="http://192.168.1.10:3000"></label>
+        <label>API key <input name="wanderer_api_key" type="password" placeholder="wanderer_key_…  (Wanderer → Settings → API)"></label>
+        <details>
+          <summary>Or use username and password</summary>
+          <label>Username or email <input name="wanderer_user"></label>
+          <label>Password <input name="wanderer_password" type="password"></label>
+        </details>
+        <label>Sources (order = priority)
+          <select name="sources">
+            <option value="usgs,osm">USGS, then OpenStreetMap</option>
+            <option value="usgs">USGS only (US)</option>
+            <option value="osm">OpenStreetMap only</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" name="auto_push"> Auto-import new trails into Wanderer</label>
+        <label>Skip trails shorter than (m) <input name="min_length_m" type="number" min="0"></label>
+        <label>Fetch again after (days) <input name="cache_days" type="number" min="1"></label>
+        <div class="row">
+          <button type="submit" class="btn primary">Save</button>
+          <button type="button" id="testBtn" class="btn">Test connection</button>
+        </div>
+        <div id="settingsMsg" class="note"></div>
+      </form>
+      <p class="small">Trail data: USGS National Digital Trails (public domain) and © OpenStreetMap contributors (ODbL).</p>
+    </section>
+  </aside>
+</main>
+
+<script src="/vendor/leaflet/leaflet.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

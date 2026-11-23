@@ -1,0 +1,28 @@
+# Paste into CasaOS: App Store -> Custom Install -> Import (docker compose).
+# Change WANDERER_URL and WANDERER_API_KEY (or set them later in the app's Settings tab).
+name: trail-fetcher
+services:
+  trail-fetcher:
+    image: ghcr.io/daviied/trail-fetcher:latest
+    container_name: trail-fetcher
+    restart: unless-stopped
+    ports:
+      - "3010:3000"
+    environment:
+      WANDERER_URL: "http://192.168.1.10:3000"   # your Wanderer web URL
+      WANDERER_API_KEY: ""                        # Wanderer -> Settings -> API -> new token
+      AUTO_PUSH: "true"
+      SOURCES: "usgs,osm"
+      # APP_PASSWORD: "change-me"                 # optional login for this app
+    volumes:
+      - /DATA/AppData/trail-fetcher:/data
+    x-casaos:
+      architectures: [amd64, arm64]
+      main: trail-fetcher
+      category: Utilities
+      title:
+        en_us: Trail Fetcher
+      description:
+        en_us: Finds trails (USGS, OpenStreetMap, GPX) and imports them into Wanderer.
+      icon: https://raw.githubusercontent.com/daviied/some-trails/main/public/icons/icon-192.png
+      port_map: "3010"
