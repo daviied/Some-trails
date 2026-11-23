@@ -17,7 +17,7 @@ async function overpass(query) {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: "data=" + encodeURIComponent(query),
-      }, { tries: 2, timeout: 180000 });
+      }, { tries: 2, timeout: 150000 });
       if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
       const json = await res.json();
       mirrorIdx = (mirrorIdx + n) % MIRRORS.length;

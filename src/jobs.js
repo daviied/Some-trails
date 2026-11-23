@@ -5,7 +5,7 @@ import { fetchUsgsTile } from "./sources/usgs.js";
 import { fetchOsmTile } from "./sources/osm.js";
 import { buildGpx } from "./gpx.js";
 import { uploadGpx, wandererConfigured } from "./wanderer.js";
-import { sleep } from "./http.js";
+import { sleep, withTimeout } from "./http.js";
 
 export const state = { jobRunning: false, pushRunning: false, pushPaused: "", currentJob: null, lastPushError: "" };
 
@@ -28,7 +28,8 @@ const q = {
   trailIns: db.prepare(`INSERT INTO trails(source,source_key,name,lines,length_m,min_lon,min_lat,max_lon,max_lat,meta,fetched_at,push_status)
     VALUES(@source,@source_key,@name,@lines,@length_m,@min_lon,@min_lat,@max_lon,@max_lat,@meta,@fetched_at,@push_status)`),
   trailUpd: db.prepare(`UPDATE trails SET name=@name, lines=@lines, length_m=@length_m, min_lon=@min_lon, min_lat=@min_lat, max_lon=@max_lon, max_lat=@max_lat, meta=@meta, fetched_at=@fetched_at WHERE id=@id`),
-  jobNext: db.prepare("SELECT * FROM jobs WHERE status='queued' ORDER BY id LIMIT 1"),
+  jobNext: db.prepare("SELECT * FROM jobs WHERE status='queued' ORDER BY (label='Browse') DESC, id LIMIT 1"),
+  browseNext: db.prepare("SELECT * FROM jobs WHERE status='queued' AND label='Browse' ORDER BY id DESC LIMIT 1"),
   jobUpd: db.prepare("UPDATE jobs SET status=@status, total=@total, done=@done, found=@found, message=@message, updated_at=@updated_at WHERE id=@id"),
   pushNext: db.prepare("SELECT * FROM trails WHERE push_status='queued' ORDER BY id LIMIT 1"),
   pushSet: db.prepare("UPDATE trails SET push_status=?, push_error=?, wanderer_id=?, pushed_at=? WHERE id=?"),
@@ -38,6 +39,8 @@ const q = {
 export function createJob(bbox, label, push = true) {
   const tiles = tilesForBbox(bbox);
   if (tiles.length > MAX_TILES) throw new Error(`Area too large (${tiles.length} tiles, limit ${MAX_TILES}). Make the box smaller.`);
+  // only the newest browse request matters; drop older ones that have not started
+  if (label === "Browse") db.prepare("UPDATE jobs SET status='cancelled', message='Replaced by newer browse' WHERE status='queued' AND label='Browse'").run();
   const r = db.prepare("INSERT INTO jobs(label,bbox,push,status,total,created_at,updated_at) VALUES(?,?,?,?,?,?,?)")
     .run(label || "Area", JSON.stringify(bbox), push ? 1 : 0, "queued", tiles.length, now(), now());
   kickJobs();
@@ -64,12 +67,41 @@ export function kickJobs() {
   (async () => {
     try {
       let job;
-      while ((job = q.jobNext.get())) await runJob(job);
+      while ((job = q.jobNext.get())) await safeRun(job);
     } finally {
       state.jobRunning = false;
       state.currentJob = null;
     }
   })();
+}
+
+const TILE_TIMEOUT_MS = Number(process.env.TILE_TIMEOUT_MS || 6 * 60e3);
+
+async function safeRun(job) {
+  try {
+    await runJob(job);
+  } catch (e) {
+    console.error(`[job ${job.id}] failed:`, e);
+    db.prepare("UPDATE jobs SET status='error', message=?, updated_at=? WHERE id=?").run(String(e.message || e).slice(0, 500), now(), job.id);
+  }
+}
+
+const BLOCK_DEG = 1; // tiles are grouped in 1° blocks; each block is built and pushed when done
+
+function blocksOf(tiles) {
+  const m = new Map();
+  for (const t of tiles) {
+    const k = `${Math.floor(t.minLon / BLOCK_DEG)}:${Math.floor(t.minLat / BLOCK_DEG)}`;
+    if (!m.has(k)) m.set(k, []);
+    m.get(k).push(t);
+  }
+  return [...m.values()].map((ts) => ({
+    tiles: ts,
+    bbox: {
+      minLon: Math.min(...ts.map((t) => t.minLon)), minLat: Math.min(...ts.map((t) => t.minLat)),
+      maxLon: Math.max(...ts.map((t) => t.maxLon)), maxLat: Math.max(...ts.map((t) => t.maxLat)),
+    },
+  }));
 }
 
 async function runJob(job) {
@@ -78,41 +110,75 @@ async function runJob(job) {
   const ttl = Number(s.cache_days) * 864e5;
   const sources = activeSources();
   const tiles = tilesForBbox(bbox);
+  const blocks = blocksOf(tiles);
+  const queue = job.push && s.auto_push === "true";
   const j = { id: job.id, status: "running", total: tiles.length * sources.length, done: 0, found: 0, message: "", updated_at: now() };
   state.currentJob = j;
   const save = () => { j.updated_at = now(); q.jobUpd.run(j); };
   save();
   const errors = [];
+  const fresh = (src, t) => { const c = q.tileGet.get(src, t.key); return c && now() - c.fetched_at < ttl; };
+  const fail = (src, ts, e) => {
+    errors.push(`${src}: ${e.message}`);
+    // remember the failure for 1 hour so browsing does not retry it on every map move
+    for (const t of ts) q.tilePut.run(src, t.key, now() - ttl + 3600e3, -1);
+    console.warn(`[job ${job.id}] ${src} failed:`, e.message);
+  };
 
-  for (const src of sources) {
-    for (const t of tiles) {
+  // One source for one block. USGS: one request for the block. OSM: tile by tile (Overpass load).
+  async function fetchBlock(src, blk) {
+    const todo = blk.tiles.filter((t) => !fresh(src, t));
+    j.done += blk.tiles.length - todo.length;
+    if (!todo.length) return;
+    if (src === "usgs") {
+      const bb = {
+        minLon: Math.min(...todo.map((t) => t.minLon)), minLat: Math.min(...todo.map((t) => t.minLat)),
+        maxLon: Math.max(...todo.map((t) => t.maxLon)), maxLat: Math.max(...todo.map((t) => t.maxLat)),
+      };
+      try {
+        const res = await withTimeout(SOURCES[src].fetch(bb), TILE_TIMEOUT_MS * 2, "USGS block took too long");
+        storeTiles(src, todo, res);
+      } catch (e) { fail(src, todo, e); }
+      j.done += todo.length;
+      save();
+      return;
+    }
+    for (const t of todo) {
       if (jobCancelled(job.id)) return;
-      const c = q.tileGet.get(src, t.key);
-      if (!c || now() - c.fetched_at >= ttl) {
-        j.message = `${SOURCES[src].label}: tile ${j.done + 1}/${j.total}`;
-        save();
-        try {
-          const res = await SOURCES[src].fetch(t);
-          storeTile(src, t, res);
-        } catch (e) {
-          errors.push(`${src} ${t.key}: ${e.message}`);
-          // remember the failure for 1 hour so browsing does not retry it on every map move
-          q.tilePut.run(src, t.key, now() - ttl + 3600e3, -1);
-          console.warn(`[job ${job.id}] ${src} tile ${t.key} failed:`, e.message);
-        }
-        await sleep(SOURCES[src].delay);
-      }
+      try {
+        const res = await withTimeout(SOURCES[src].fetch(t), TILE_TIMEOUT_MS, `tile took longer than ${TILE_TIMEOUT_MS / 60e3} min`);
+        storeTiles(src, [t], res);
+      } catch (e) { fail(src, [t], e); }
       j.done++;
-      if (j.done % 5 === 0) save();
+      save();
+      await sleep(SOURCES[src].delay);
     }
   }
 
-  j.message = "Building trails…";
-  save();
-  const built = buildTrails(bbox, sources, job.push && s.auto_push === "true");
-  j.found = built;
+  for (let bi = 0; bi < blocks.length; bi++) {
+    if (jobCancelled(job.id)) return;
+    // a big area import lets browse requests go first
+    if (job.label !== "Browse") {
+      let b;
+      while ((b = q.browseNext.get())) { await safeRun(b); state.currentJob = j; }
+    }
+    const blk = blocks[bi];
+    j.message = `Block ${bi + 1}/${blocks.length}: downloading`;
+    save();
+    await Promise.all(sources.map((src) => fetchBlock(src, blk)));
+    if (jobCancelled(job.id)) return;
+    // build and push this block now, so trails reach Wanderer while the job runs
+    const area = {
+      minLon: Math.max(blk.bbox.minLon, bbox.minLon), minLat: Math.max(blk.bbox.minLat, bbox.minLat),
+      maxLon: Math.min(blk.bbox.maxLon, bbox.maxLon), maxLat: Math.min(blk.bbox.maxLat, bbox.maxLat),
+    };
+    j.found += buildTrails(area, sources, queue);
+    save();
+    kickPush();
+  }
+
   j.status = errors.length && errors.length >= j.total ? "error" : "done";
-  j.message = errors.length ? `${errors.length} tile(s) failed. Run again to retry. First: ${errors[0]}` : "";
+  j.message = errors.length ? `${errors.length} request(s) failed. Run again to retry. First: ${errors[0]}` : "";
   save();
   kickPush();
 }
@@ -122,7 +188,7 @@ function jobCancelled(id) {
   return !r || r.status === "cancelled";
 }
 
-const storeTile = db.transaction((src, tile, res) => {
+const storeTiles = db.transaction((src, tiles, res) => {
   const segs = Array.isArray(res) ? res : res.segments;
   for (const sg of segs) {
     const b = bboxOfLines([sg.line]);
@@ -135,7 +201,7 @@ const storeTile = db.transaction((src, tile, res) => {
   const routes = Array.isArray(res) ? [] : res.routes || [];
   const autoQ = getSettings().auto_push === "true";
   for (const r of routes) upsertTrail(src, r.key, r.name, r.lines, r.meta, autoQ ? "queued" : "new");
-  q.tilePut.run(src, tile.key, now(), segs.length + routes.length);
+  for (const t of tiles) q.tilePut.run(src, t.key, now(), segs.length + routes.length);
 });
 
 function upsertTrail(source, key, name, lines, meta, status) {
@@ -220,7 +286,7 @@ export function kickPush() {
           if (e.retry) { await sleep(15000); continue; }
           q.pushSet.run("error", e.message.slice(0, 500), null, null, t.id);
         }
-        await sleep(Number(process.env.PUSH_DELAY_MS || 400));
+        await sleep(Number(process.env.PUSH_DELAY_MS || 200));
       }
     } finally {
       state.pushRunning = false;

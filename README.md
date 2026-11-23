@@ -59,7 +59,7 @@ the app works but the install option may not show. Use a reverse proxy with HTTP
 | `AUTO_FETCH_MAX_TILES` | `16` | Largest view (in 0.25° tiles) that downloads automatically while you browse |
 | `MAX_JOB_TILES` | `6000` | Largest area import |
 | `OVERPASS_URLS` | 3 public servers | Comma-separated Overpass servers |
-| `PUSH_DELAY_MS` | `400` | Wait time between uploads to Wanderer |
+| `PUSH_DELAY_MS` | `200` | Wait time between uploads to Wanderer |
 
 The Settings tab can change most of these values. Values set there override the environment.
 
